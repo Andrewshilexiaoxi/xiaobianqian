@@ -1,0 +1,7 @@
+scripts/SmallNoteDesktop
+.DS_Store
+notes.json
+deleted.json
+attachments/
+*.log
+

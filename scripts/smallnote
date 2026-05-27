@@ -1,0 +1,347 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+APP="$ROOT/SmallNoteDesktop"
+DATA_DIR="${XIAOBIANQIAN_DATA_DIR:-$HOME/Library/Application Support/xiaobianqian}"
+NOTES="$DATA_DIR/notes.json"
+DELETED="$DATA_DIR/deleted.json"
+
+mkdir -p "$DATA_DIR"
+
+build_app_if_needed() {
+  if [[ ! -x "$APP" || "$ROOT/SmallNoteDesktop.swift" -nt "$APP" ]]; then
+    /usr/bin/swiftc "$ROOT/SmallNoteDesktop.swift" -o "$APP" -framework AppKit -framework CoreGraphics
+  fi
+}
+
+ensure_app() {
+  build_app_if_needed
+  if ! pgrep -f "$APP$" >/dev/null 2>&1; then
+    nohup "$APP" >/tmp/xiaobianqian.log 2>&1 &
+  fi
+}
+
+case "${1:-}" in
+  add)
+    shift || true
+    text_parts=()
+    attachment_paths=()
+    reading_attachments=0
+    for arg in "$@"; do
+      if [[ "$arg" == "--" ]]; then
+        reading_attachments=1
+        continue
+      fi
+      if [[ "$reading_attachments" -eq 1 ]]; then
+        attachment_paths+=("$arg")
+      else
+        text_parts+=("$arg")
+      fi
+    done
+    text="${text_parts[*]}"
+    if [[ -z "$text" ]]; then
+      echo "请在 add 后面写小便签内容。"
+      exit 1
+    fi
+    /usr/bin/python3 - "$NOTES" "$DATA_DIR" "$text" "${attachment_paths[@]}" <<'PY'
+import json
+import os
+import shutil
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+path, data_dir, text = sys.argv[1], sys.argv[2], sys.argv[3]
+attachment_inputs = sys.argv[4:]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        notes = json.load(f)
+except Exception:
+    notes = []
+
+note_id = str(uuid.uuid4())
+attachment_dir = Path(data_dir) / "attachments" / note_id
+attachments = []
+
+def kind_for(file_path):
+    suffix = Path(file_path).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".heic", ".webp", ".tiff", ".bmp"}:
+        return "image"
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in {".md", ".markdown"}:
+        return "markdown"
+    return "file"
+
+for source in attachment_inputs:
+    source_path = Path(source).expanduser()
+    if not source_path.is_file():
+        continue
+    attachment_dir.mkdir(parents=True, exist_ok=True)
+    destination = attachment_dir / source_path.name
+    if destination.exists():
+        stem, suffix = source_path.stem, source_path.suffix
+        counter = 2
+        while destination.exists():
+            destination = attachment_dir / f"{stem}-{counter}{suffix}"
+            counter += 1
+    shutil.copy2(source_path, destination)
+    attachments.append({
+        "name": source_path.name,
+        "path": str(destination),
+        "type": kind_for(source_path),
+    })
+
+notes.append({
+    "id": note_id,
+    "text": text,
+    "color": len(notes) % 6,
+    "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "attachments": attachments,
+})
+
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(notes, f, ensure_ascii=False, indent=2)
+PY
+    ensure_app
+    echo "已添加小便签。"
+    ;;
+  clear)
+    printf "[]" > "$NOTES"
+    ensure_app
+    echo "已清空小便签。"
+    ;;
+  restore)
+    /usr/bin/python3 - "$NOTES" "$DELETED" <<'PY'
+import json
+import os
+import sys
+
+notes_path, deleted_path = sys.argv[1], sys.argv[2]
+try:
+    deleted = json.load(open(deleted_path, encoding="utf-8"))
+except Exception:
+    deleted = []
+
+if not deleted:
+    print("没有可恢复的小便签。")
+    raise SystemExit(0)
+
+batch = deleted.pop()
+try:
+    current = json.load(open(notes_path, encoding="utf-8"))
+except Exception:
+    current = []
+
+current_ids = {note.get("id") for note in current}
+restored = [note for note in batch.get("notes", []) if note.get("id") not in current_ids]
+current.extend(restored)
+
+os.makedirs(os.path.dirname(notes_path), exist_ok=True)
+with open(notes_path, "w", encoding="utf-8") as f:
+    json.dump(current, f, ensure_ascii=False, indent=2)
+with open(deleted_path, "w", encoding="utf-8") as f:
+    json.dump(deleted, f, ensure_ascii=False, indent=2)
+
+print(f"已恢复 {len(restored)} 条小便签。")
+PY
+    ensure_app
+    ;;
+  archive)
+    shift || true
+    note_id="${1:-}"
+    if [[ -z "$note_id" ]]; then
+      echo "请提供要存入语音笔记的小便签 ID。"
+      exit 1
+    fi
+    /usr/bin/python3 - "$NOTES" "$note_id" <<'PY'
+import json
+import os
+import re
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
+notes_path, note_id = sys.argv[1], sys.argv[2]
+vault_root_value = os.environ.get("XIAOBIANQIAN_OBSIDIAN_VAULT", "").strip()
+target_value = os.environ.get("XIAOBIANQIAN_OBSIDIAN_NOTE", "").strip()
+
+if not vault_root_value or not target_value:
+    print("请先设置 XIAOBIANQIAN_OBSIDIAN_VAULT 和 XIAOBIANQIAN_OBSIDIAN_NOTE 后再归档。")
+    raise SystemExit(1)
+
+vault_root = Path(vault_root_value).expanduser()
+target = Path(target_value).expanduser()
+if not target.is_absolute():
+    target = vault_root / target
+vault_attachment_root = vault_root / "资料库/附件/小便签" / note_id
+
+try:
+    notes = json.load(open(notes_path, encoding="utf-8"))
+except Exception:
+    notes = []
+
+note = next((item for item in notes if item.get("id") == note_id), None)
+if not note:
+    print("没有找到这条小便签。")
+    raise SystemExit(1)
+
+text = str(note.get("text", "")).strip()
+attachments = note.get("attachments") or []
+archived_attachments = []
+
+def clean_line(value):
+    return re.sub(r"\s+", " ", value).strip()
+
+def make_title(value):
+    first = clean_line(value.splitlines()[0] if value else "小便签记录")
+    first = re.sub(r"^[#>\\-\\*\\s]+", "", first)
+    first = re.sub(r"[。！？.!?；;：:，,、]+$", "", first)
+    return first[:22] or "小便签记录"
+
+def unique_destination(directory, name):
+    destination = directory / name
+    if not destination.exists():
+        return destination
+    stem = destination.stem
+    suffix = destination.suffix
+    counter = 2
+    while True:
+        candidate = directory / f"{stem}-{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+def wiki_link_for(path, label):
+    relative = path.relative_to(vault_root).as_posix()
+    return f"[[{relative}|{label}]]"
+
+def archive_attachments():
+    if not attachments:
+        return []
+    vault_attachment_root.mkdir(parents=True, exist_ok=True)
+    results = []
+    for item in attachments:
+        source = Path(str(item.get("path", ""))).expanduser()
+        name = str(item.get("name") or source.name or "附件")
+        if not source.is_file():
+            results.append({
+                "name": name,
+                "link": name,
+                "copied": False,
+            })
+            continue
+        destination = unique_destination(vault_attachment_root, name)
+        shutil.copy2(source, destination)
+        results.append({
+            "name": name,
+            "link": wiki_link_for(destination, name),
+            "copied": True,
+        })
+    return results
+
+def quote_content(value):
+    parts = [line.rstrip() for line in value.strip().splitlines()]
+    if archived_attachments:
+        if parts:
+            parts.append("")
+        parts.append("附件：" + "；".join(item["link"] for item in archived_attachments))
+    return "\n".join(f"> {line}" if line else ">" for line in (parts or [""]))
+
+keyword_tags = [
+    ("腾讯云", "#腾讯云"),
+    ("服务器", "#服务器"),
+    ("备案", "#ICP备案"),
+    ("ICP", "#ICP备案"),
+    ("个人主页", "#个人主页"),
+    ("主页", "#个人主页"),
+    ("英语", "#英语教学"),
+    ("学生", "#学生"),
+    ("作文", "#作文"),
+    ("课件", "#课件"),
+    ("课堂", "#课堂"),
+    ("图片", "#图片"),
+    ("PDF", "#PDF"),
+    ("Markdown", "#Markdown"),
+    ("附件", "#附件"),
+    ("提醒", "#提醒"),
+    ("想法", "#想法"),
+]
+
+def make_tags(value):
+    tags = []
+    lower = value.lower()
+    for key, tag in keyword_tags:
+        if key.lower() in lower and tag not in tags:
+            tags.append(tag)
+    for attachment in attachments:
+        kind = attachment.get("type")
+        tag = {"image": "#图片", "pdf": "#PDF", "markdown": "#Markdown"}.get(kind, "#附件")
+        if tag not in tags:
+            tags.append(tag)
+    for fallback in ("#小便签", "#语音笔记", "#闪念"):
+        if fallback not in tags:
+            tags.append(fallback)
+    return " ".join(tags[:3])
+
+archived_attachments = archive_attachments()
+title = make_title(text)
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+entry = f"\n\n#### {title}\n{quote_content(text)}\n{timestamp}\n{make_tags(text)}\n"
+
+target.parent.mkdir(parents=True, exist_ok=True)
+with target.open("a", encoding="utf-8") as f:
+    f.write(entry)
+
+tail = target.read_text(encoding="utf-8")[-max(500, len(entry) + 50):]
+if title not in tail or (archived_attachments and archived_attachments[0]["link"] not in tail):
+    raise RuntimeError("写入后验证失败。")
+
+print("已存入语音笔记。")
+print(f"title={title}")
+PY
+    ;;
+  list)
+    /usr/bin/python3 - "$NOTES" <<'PY'
+import json
+import sys
+
+try:
+    notes = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    notes = []
+
+if not notes:
+    print("当前没有小便签。")
+else:
+    for idx, note in enumerate(notes, 1):
+        attachments = note.get("attachments") or []
+        suffix = f"（{len(attachments)} 个附件）" if attachments else ""
+        print(f"{idx}. {note.get('text', '')}{suffix}")
+PY
+    ;;
+  open)
+    ensure_app
+    echo "小便签桌面程序已打开。"
+    ;;
+  stop)
+    pkill -f "$APP" >/dev/null 2>&1 || true
+    echo "小便签桌面程序已关闭。"
+    ;;
+  *)
+    cat <<'EOF'
+用法：
+  smallnote add 你的内容
+  smallnote list
+  smallnote clear
+  smallnote restore
+  smallnote archive NOTE_ID
+  smallnote open
+  smallnote stop
+EOF
+    ;;
+esac

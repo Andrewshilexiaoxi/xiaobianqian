@@ -1,0 +1,8 @@
+interface:
+  display_name: "小便签"
+  short_description: "把临时想法贴成彩色桌面便签"
+  brand_color: "#F6C945"
+  default_prompt: "Use $xiaobianqian to record this as a desktop sticky note."
+
+policy:
+  allow_implicit_invocation: true
