@@ -13,6 +13,7 @@ struct StickyNote: Codable, Equatable {
     let text: String
     let color: Int
     let createdAt: String
+    let archivedAt: String?
     let attachments: [NoteAttachment]?
 }
 
@@ -114,7 +115,8 @@ final class NoteCardView: NSView {
         close.autoresizingMask = [.minXMargin, .minYMargin]
         addSubview(close)
 
-        let archive = NSButton(title: "存笔记", target: self, action: #selector(archiveSelf(_:)))
+        let isArchived = note.archivedAt != nil
+        let archive = NSButton(title: isArchived ? "已存" : "存笔记", target: self, action: #selector(archiveSelf(_:)))
         archive.bezelStyle = .rounded
         archive.isBordered = true
         archive.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
@@ -122,6 +124,7 @@ final class NoteCardView: NSView {
         archive.frame = NSRect(x: bounds.width - 100, y: bounds.height - 34, width: 58, height: 24)
         archive.autoresizingMask = [.minXMargin, .minYMargin]
         archive.toolTip = "存入 Obsidian 语音笔记"
+        archive.isEnabled = !isArchived
         addSubview(archive)
 
         let label = NSTextField(labelWithString: note.text)

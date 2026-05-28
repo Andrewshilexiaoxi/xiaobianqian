@@ -100,6 +100,7 @@ notes.append({
     "text": text,
     "color": len(notes) % 6,
     "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "archivedAt": None,
     "attachments": attachments,
 })
 
@@ -189,6 +190,10 @@ note = next((item for item in notes if item.get("id") == note_id), None)
 if not note:
     print("没有找到这条小便签。")
     raise SystemExit(1)
+
+if note.get("archivedAt"):
+    print("这条小便签已经存入 Obsidian。")
+    raise SystemExit(0)
 
 text = str(note.get("text", "")).strip()
 attachments = note.get("attachments") or []
@@ -300,6 +305,14 @@ with target.open("a", encoding="utf-8") as f:
 tail = target.read_text(encoding="utf-8")[-max(500, len(entry) + 50):]
 if title not in tail or (archived_attachments and archived_attachments[0]["link"] not in tail):
     raise RuntimeError("写入后验证失败。")
+
+archive_timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+for item in notes:
+    if item.get("id") == note_id:
+        item["archivedAt"] = archive_timestamp
+        break
+with open(notes_path, "w", encoding="utf-8") as f:
+    json.dump(notes, f, ensure_ascii=False, indent=2)
 
 print("已存入语音笔记。")
 print(f"title={title}")

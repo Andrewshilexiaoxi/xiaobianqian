@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="360" viewBox="0 0 920 360" role="img" aria-labelledby="title desc">
+  <title id="title">小便签工作流</title>
+  <desc id="desc">从下载、添加便签到可选 Obsidian 归档的流程图。</desc>
+  <rect width="920" height="360" rx="24" fill="#fff8e7"/>
+  <text x="44" y="54" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="28" font-weight="700" fill="#222">小便签使用流程</text>
+  <text x="44" y="86" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16" fill="#5f6368">下载后用一条命令创建桌面便签，需要时再归档到 Obsidian。</text>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
+    <rect x="54" y="132" width="170" height="112" rx="16" fill="#ffdf7e" stroke="#d9a900" stroke-width="2"/>
+    <text x="83" y="174" font-size="20" font-weight="700" fill="#222">1. 下载仓库</text>
+    <text x="77" y="205" font-size="14" fill="#333">git clone 或 ZIP</text>
+    <rect x="282" y="132" width="170" height="112" rx="16" fill="#bde7ff" stroke="#4da3cf" stroke-width="2"/>
+    <text x="308" y="174" font-size="20" font-weight="700" fill="#222">2. 新增便签</text>
+    <text x="307" y="205" font-size="14" fill="#333">smallnote add</text>
+    <rect x="510" y="132" width="170" height="112" rx="16" fill="#ccefbf" stroke="#6fb85e" stroke-width="2"/>
+    <text x="535" y="174" font-size="20" font-weight="700" fill="#222">3. 贴到桌面</text>
+    <text x="545" y="205" font-size="14" fill="#333">自动排列显示</text>
+    <rect x="738" y="132" width="130" height="112" rx="16" fill="#ead7ff" stroke="#9d74cc" stroke-width="2"/>
+    <text x="766" y="174" font-size="20" font-weight="700" fill="#222">4. 归档</text>
+    <text x="754" y="205" font-size="14" fill="#333">可选写入 Obsidian</text>
+    <path d="M232 188 H270" stroke="#60646b" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+    <path d="M460 188 H498" stroke="#60646b" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+    <path d="M688 188 H726" stroke="#60646b" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+    <rect x="282" y="276" width="398" height="42" rx="12" fill="#fff" stroke="#e1d7bd"/>
+    <text x="306" y="302" font-size="15" fill="#333">归档成功后按钮变成「已存」，状态会持久保存。</text>
+  </g>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#60646b"/>
+    </marker>
+  </defs>
+</svg>
