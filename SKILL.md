@@ -41,6 +41,7 @@ Use this skill whenever the user's message includes any of these trigger phrases
 - If the user asks to `显示小便签`, start or refresh the desktop sticky-note display.
 - If the user asks to store a sticky note into the voice note, use `smallnote archive NOTE_ID` when the note ID is known.
 - After a sticky note is archived successfully, the archived state must persist in `notes.json` via the note's `archivedAt` field. The desktop UI must keep showing `已存` for that note after any later add/delete/refresh operation, not only immediately after the button click.
+- The desktop display should be launched through `smallnote open` or `smallnote add`, which builds and opens `scripts/SmallNoteDesktop.app`. Do not run the raw `SmallNoteDesktop` binary in a foreground terminal session, because closing that terminal can close the sticky-note display.
 - If the user asks what this skill does, explain the above briefly.
 
 ## Commands

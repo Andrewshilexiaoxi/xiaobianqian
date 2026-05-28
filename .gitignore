@@ -1,7 +1,7 @@
 scripts/SmallNoteDesktop
+scripts/SmallNoteDesktop.app/
 .DS_Store
 notes.json
 deleted.json
 attachments/
 *.log
-

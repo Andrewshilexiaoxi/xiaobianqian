@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-APP="$ROOT/SmallNoteDesktop"
+LEGACY_APP="$ROOT/SmallNoteDesktop"
+APP_BUNDLE="$ROOT/SmallNoteDesktop.app"
+APP="$APP_BUNDLE/Contents/MacOS/SmallNoteDesktop"
 DATA_DIR="${XIAOBIANQIAN_DATA_DIR:-$HOME/Library/Application Support/xiaobianqian}"
 NOTES="$DATA_DIR/notes.json"
 DELETED="$DATA_DIR/deleted.json"
@@ -11,14 +13,45 @@ mkdir -p "$DATA_DIR"
 
 build_app_if_needed() {
   if [[ ! -x "$APP" || "$ROOT/SmallNoteDesktop.swift" -nt "$APP" ]]; then
+    mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
     /usr/bin/swiftc "$ROOT/SmallNoteDesktop.swift" -o "$APP" -framework AppKit -framework CoreGraphics
+    cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>SmallNoteDesktop</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.andrew.xiaobianqian.desktop</string>
+  <key>CFBundleName</key>
+  <string>小便签</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>LSBackgroundOnly</key>
+  <false/>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+EOF
   fi
 }
 
 ensure_app() {
   build_app_if_needed
   if ! pgrep -f "$APP$" >/dev/null 2>&1; then
-    nohup "$APP" >/tmp/xiaobianqian.log 2>&1 &
+    /bin/launchctl setenv XIAOBIANQIAN_CLI "$ROOT/smallnote" >/dev/null 2>&1 || true
+    /bin/launchctl setenv XIAOBIANQIAN_DATA_DIR "$DATA_DIR" >/dev/null 2>&1 || true
+    if [[ -n "${XIAOBIANQIAN_OBSIDIAN_VAULT:-}" ]]; then
+      /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_VAULT "$XIAOBIANQIAN_OBSIDIAN_VAULT" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${XIAOBIANQIAN_OBSIDIAN_NOTE:-}" ]]; then
+      /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_NOTE "$XIAOBIANQIAN_OBSIDIAN_NOTE" >/dev/null 2>&1 || true
+    fi
+    /usr/bin/open -gj "$APP_BUNDLE"
   fi
 }
 
@@ -343,6 +376,7 @@ PY
     ;;
   stop)
     pkill -f "$APP" >/dev/null 2>&1 || true
+    pkill -f "$LEGACY_APP$" >/dev/null 2>&1 || true
     echo "小便签桌面程序已关闭。"
     ;;
   *)
