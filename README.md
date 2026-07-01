@@ -2,17 +2,46 @@
 
 一个极简 macOS 桌面便签工具：把临时想法、待办、提醒贴到桌面左侧，处理完就删除，值得保留的内容可以一键归档到 Obsidian。
 
-![小便签工作流](docs/images/workflow.svg)
+![按 Ctrl+2 直接新建空白小便签](docs/images/01-ctrl-2-new-note.jpg)
 
 ## 它能做什么
 
 - 彩色桌面便签，自动排列在桌面左侧。
+- 按 `Ctrl+2` 可直接新建一张空白便签，并自动把光标放进正文输入区。
+- 便签正文是原生可编辑文本框，支持输入法、语音输入、复制、粘贴、删除、撤销和修改。
 - 命令行快速添加、查看、清空、恢复。
 - 支持图片、PDF、Markdown 等附件。
 - 单条便签可删除。
 - 可选：点击便签上的 `存笔记`，把内容归档到 Obsidian。
 - 已归档状态会持久保存：点过 `存笔记` 后会显示 `已存`，之后新增或删除其他便签也不会变回未归档状态。
+- 删除最后一张便签后，桌面窗口会自动隐藏，程序仍继续运行，方便下次用 `Ctrl+2` 新建。
 - 可作为 Codex skill 使用，在 Codex 里说“小便签 今天记得……”即可创建桌面便签。
+
+## 功能预览
+
+### 1. 按 Ctrl+2 新建便签
+
+![按 Ctrl+2 弹出新的空白小便签](docs/images/01-ctrl-2-new-note.jpg)
+
+### 2. 在便签里直接编辑
+
+![可以直接在便签正文里编辑、复制、删除和输入](docs/images/02-edit-in-note.jpg)
+
+### 3. 添加附件
+
+![点击附件按钮添加图片、PDF 或 Markdown 文件](docs/images/03-add-attachments.jpg)
+
+### 4. 附件显示在便签里
+
+![添加附件后会显示在便签下方](docs/images/04-attachment-preview.jpg)
+
+### 5. 一键存入 Obsidian
+
+![点击存笔记把文字和附件一起写入 Obsidian](docs/images/05-save-to-obsidian.jpg)
+
+### 6. Obsidian 归档效果
+
+![归档后在 Obsidian 中保留正文和附件链接](docs/images/06-obsidian-archive-result.jpg)
 
 ## 系统要求
 
@@ -61,6 +90,8 @@ cd ~/Downloads/xiaobianqian-main
 
 这时你可以关闭终端，小便签不会跟着关闭。
 
+桌面程序保持打开后，也可以随时按 `Ctrl+2` 新建一张空白便签，然后直接输入内容。
+
 再添加一条：
 
 ```bash
@@ -78,6 +109,7 @@ cd ~/Downloads/xiaobianqian-main
 | 命令 | 作用 |
 | --- | --- |
 | `./scripts/smallnote add "内容"` | 新增一条便签 |
+| `./scripts/smallnote add "内容" --title "标题" --tags "#标签1 #标签2 #标签3"` | 新增带标题和标签的便签，归档时会直接使用 |
 | `./scripts/smallnote add "内容" -- "/path/to/file.pdf"` | 新增带附件的便签 |
 | `./scripts/smallnote list` | 查看当前便签列表 |
 | `./scripts/smallnote open` | 打开或刷新桌面便签程序 |
@@ -138,8 +170,10 @@ export XIAOBIANQIAN_OBSIDIAN_NOTE="临时存放/01语音笔记.md"
 #### 自动标题
 > 便签正文
 2026-05-28 15:30
-#小便签 #语音笔记 #闪念
+#标签1 #标签2 #标签3
 ```
+
+如果创建便签时传入了 `--title` 和 `--tags`，归档会直接使用这两个字段；否则会使用默认标题，标签行可以留空。
 
 如果便签带附件，附件会复制到 Obsidian 仓库里：
 
@@ -176,7 +210,9 @@ export XIAOBIANQIAN_OBSIDIAN_NOTE="临时存放/01语音笔记.md"
   "color": 1,
   "createdAt": "2026-05-28T00:16:24Z",
   "archivedAt": "2026-05-28T15:30:00+08:00",
-  "attachments": []
+  "attachments": [],
+  "title": "周六课程提醒",
+  "tags": "#课程 #提醒 #周末安排"
 }
 ```
 

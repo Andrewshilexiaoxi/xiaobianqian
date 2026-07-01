@@ -12,9 +12,9 @@ DELETED="$DATA_DIR/deleted.json"
 mkdir -p "$DATA_DIR"
 
 build_app_if_needed() {
-  if [[ ! -x "$APP" || "$ROOT/SmallNoteDesktop.swift" -nt "$APP" ]]; then
+  if [[ ! -x "$APP" || "$ROOT/SmallNoteDesktop.swift" -nt "$APP" || "$ROOT/smallnote" -nt "$APP_BUNDLE/Contents/Info.plist" ]]; then
     mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
-    /usr/bin/swiftc "$ROOT/SmallNoteDesktop.swift" -o "$APP" -framework AppKit -framework CoreGraphics
+    /usr/bin/swiftc "$ROOT/SmallNoteDesktop.swift" -o "$APP" -framework AppKit -framework CoreGraphics -framework Carbon
     cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -31,7 +31,7 @@ build_app_if_needed() {
   <key>LSBackgroundOnly</key>
   <false/>
   <key>LSUIElement</key>
-  <true/>
+  <false/>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
@@ -42,6 +42,13 @@ EOF
 
 ensure_app() {
   build_app_if_needed
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    running_path="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$running_path" != "$APP" ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -f 'SmallNoteDesktop.app/Contents/MacOS/SmallNoteDesktop' 2>/dev/null || true)
   if ! pgrep -f "$APP$" >/dev/null 2>&1; then
     /bin/launchctl setenv XIAOBIANQIAN_CLI "$ROOT/smallnote" >/dev/null 2>&1 || true
     /bin/launchctl setenv XIAOBIANQIAN_DATA_DIR "$DATA_DIR" >/dev/null 2>&1 || true
@@ -51,7 +58,7 @@ ensure_app() {
     if [[ -n "${XIAOBIANQIAN_OBSIDIAN_NOTE:-}" ]]; then
       /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_NOTE "$XIAOBIANQIAN_OBSIDIAN_NOTE" >/dev/null 2>&1 || true
     fi
-    /usr/bin/open -gj "$APP_BUNDLE"
+    /usr/bin/open -j "$APP_BUNDLE"
   fi
 }
 
@@ -60,24 +67,41 @@ case "${1:-}" in
     shift || true
     text_parts=()
     attachment_paths=()
-    reading_attachments=0
+    note_title=""
+    note_tags=""
+    state="text"
     for arg in "$@"; do
-      if [[ "$arg" == "--" ]]; then
-        reading_attachments=1
-        continue
-      fi
-      if [[ "$reading_attachments" -eq 1 ]]; then
-        attachment_paths+=("$arg")
-      else
-        text_parts+=("$arg")
-      fi
+      case "$state" in
+        text)
+          if [[ "$arg" == "--" ]]; then
+            state="attachments"
+          elif [[ "$arg" == "--title" ]]; then
+            state="expect_title"
+          elif [[ "$arg" == "--tags" ]]; then
+            state="expect_tags"
+          else
+            text_parts+=("$arg")
+          fi
+          ;;
+        expect_title)
+          note_title="$arg"
+          state="text"
+          ;;
+        expect_tags)
+          note_tags="$arg"
+          state="text"
+          ;;
+        attachments)
+          attachment_paths+=("$arg")
+          ;;
+      esac
     done
     text="${text_parts[*]}"
     if [[ -z "$text" ]]; then
       echo "请在 add 后面写小便签内容。"
       exit 1
     fi
-    /usr/bin/python3 - "$NOTES" "$DATA_DIR" "$text" "${attachment_paths[@]}" <<'PY'
+    /usr/bin/python3 - "$NOTES" "$DATA_DIR" "$text" "$note_title" "$note_tags" "${attachment_paths[@]}" <<'PY'
 import json
 import os
 import shutil
@@ -87,7 +111,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 path, data_dir, text = sys.argv[1], sys.argv[2], sys.argv[3]
-attachment_inputs = sys.argv[4:]
+note_title = sys.argv[4] if len(sys.argv) > 4 else ""
+note_tags = sys.argv[5] if len(sys.argv) > 5 else ""
+attachment_inputs = sys.argv[6:]
 os.makedirs(os.path.dirname(path), exist_ok=True)
 try:
     with open(path, "r", encoding="utf-8") as f:
@@ -135,6 +161,8 @@ notes.append({
     "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "archivedAt": None,
     "attachments": attachments,
+    "title": note_title,
+    "tags": note_tags,
 })
 
 with open(path, "w", encoding="utf-8") as f:
@@ -194,7 +222,7 @@ PY
     /usr/bin/python3 - "$NOTES" "$note_id" <<'PY'
 import json
 import os
-import re
+import fcntl
 import shutil
 import sys
 from datetime import datetime
@@ -225,21 +253,22 @@ if not note:
     raise SystemExit(1)
 
 if note.get("archivedAt"):
-    print("这条小便签已经存入 Obsidian。")
+    print("这条小便签已经存入语音笔记。")
     raise SystemExit(0)
 
 text = str(note.get("text", "")).strip()
+# 标题和标签在创建便签时由 AI 生成并存储，此处直接读取
+title = str(note.get("title", "")).strip() or "小便签记录"
+tags = str(note.get("tags", "")).strip()
 attachments = note.get("attachments") or []
-archived_attachments = []
 
-def clean_line(value):
-    return re.sub(r"\s+", " ", value).strip()
-
-def make_title(value):
-    first = clean_line(value.splitlines()[0] if value else "小便签记录")
-    first = re.sub(r"^[#>\\-\\*\\s]+", "", first)
-    first = re.sub(r"[。！？.!?；;：:，,、]+$", "", first)
-    return first[:22] or "小便签记录"
+# 时间戳取便签创建时间
+created_at = note.get("createdAt", "")
+try:
+    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    timestamp = dt.astimezone().strftime("%Y-%m-%d %H:%M")
+except Exception:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
 def unique_destination(directory, name):
     destination = directory / name
@@ -267,20 +296,14 @@ def archive_attachments():
         source = Path(str(item.get("path", ""))).expanduser()
         name = str(item.get("name") or source.name or "附件")
         if not source.is_file():
-            results.append({
-                "name": name,
-                "link": name,
-                "copied": False,
-            })
+            results.append({"name": name, "link": name, "copied": False})
             continue
         destination = unique_destination(vault_attachment_root, name)
         shutil.copy2(source, destination)
-        results.append({
-            "name": name,
-            "link": wiki_link_for(destination, name),
-            "copied": True,
-        })
+        results.append({"name": name, "link": wiki_link_for(destination, name), "copied": True})
     return results
+
+archived_attachments = archive_attachments()
 
 def quote_content(value):
     parts = [line.rstrip() for line in value.strip().splitlines()]
@@ -290,50 +313,14 @@ def quote_content(value):
         parts.append("附件：" + "；".join(item["link"] for item in archived_attachments))
     return "\n".join(f"> {line}" if line else ">" for line in (parts or [""]))
 
-keyword_tags = [
-    ("腾讯云", "#腾讯云"),
-    ("服务器", "#服务器"),
-    ("备案", "#ICP备案"),
-    ("ICP", "#ICP备案"),
-    ("个人主页", "#个人主页"),
-    ("主页", "#个人主页"),
-    ("英语", "#英语教学"),
-    ("学生", "#学生"),
-    ("作文", "#作文"),
-    ("课件", "#课件"),
-    ("课堂", "#课堂"),
-    ("图片", "#图片"),
-    ("PDF", "#PDF"),
-    ("Markdown", "#Markdown"),
-    ("附件", "#附件"),
-    ("提醒", "#提醒"),
-    ("想法", "#想法"),
-]
-
-def make_tags(value):
-    tags = []
-    lower = value.lower()
-    for key, tag in keyword_tags:
-        if key.lower() in lower and tag not in tags:
-            tags.append(tag)
-    for attachment in attachments:
-        kind = attachment.get("type")
-        tag = {"image": "#图片", "pdf": "#PDF", "markdown": "#Markdown"}.get(kind, "#附件")
-        if tag not in tags:
-            tags.append(tag)
-    for fallback in ("#小便签", "#语音笔记", "#闪念"):
-        if fallback not in tags:
-            tags.append(fallback)
-    return " ".join(tags[:3])
-
-archived_attachments = archive_attachments()
-title = make_title(text)
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-entry = f"\n\n#### {title}\n{quote_content(text)}\n{timestamp}\n{make_tags(text)}\n"
+entry = f"\n\n#### {title}\n{quote_content(text)}\n{timestamp}\n{tags}\n"
 
 target.parent.mkdir(parents=True, exist_ok=True)
 with target.open("a", encoding="utf-8") as f:
+    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
     f.write(entry)
+    f.flush()
+    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 tail = target.read_text(encoding="utf-8")[-max(500, len(entry) + 50):]
 if title not in tail or (archived_attachments and archived_attachments[0]["link"] not in tail):
@@ -375,9 +362,29 @@ PY
     echo "小便签桌面程序已打开。"
     ;;
   stop)
-    pkill -f "$APP" >/dev/null 2>&1 || true
+    pkill -f 'SmallNoteDesktop.app/Contents/MacOS/SmallNoteDesktop' >/dev/null 2>&1 || true
     pkill -f "$LEGACY_APP$" >/dev/null 2>&1 || true
     echo "小便签桌面程序已关闭。"
+    ;;
+  doctor)
+    build_app_if_needed
+    echo "目标程序：$APP"
+    echo "运行中的 SmallNoteDesktop："
+    pgrep -fl SmallNoteDesktop || echo "  未运行"
+    echo "当前便签数据：$NOTES"
+    if [[ -f "$NOTES" ]]; then
+      /usr/bin/python3 - "$NOTES" <<'PY'
+import json
+import sys
+try:
+    notes = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    notes = []
+print(f"便签数量：{len(notes)}")
+PY
+    else
+      echo "便签数量：0"
+    fi
     ;;
   *)
     cat <<'EOF'
