@@ -2,19 +2,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-LEGACY_APP="$ROOT/SmallNoteDesktop"
 APP_BUNDLE="$ROOT/SmallNoteDesktop.app"
 APP="$APP_BUNDLE/Contents/MacOS/SmallNoteDesktop"
+APP_ID="com.andrew.xiaobianqian.desktop"
 DATA_DIR="${XIAOBIANQIAN_DATA_DIR:-$HOME/Library/Application Support/xiaobianqian}"
 NOTES="$DATA_DIR/notes.json"
 DELETED="$DATA_DIR/deleted.json"
+HOTWORDS="$DATA_DIR/voice-hotwords.txt"
+APP_PROCESS_PATTERN="${APP}$"
 
 mkdir -p "$DATA_DIR"
 
 build_app_if_needed() {
-  if [[ ! -x "$APP" || "$ROOT/SmallNoteDesktop.swift" -nt "$APP" || "$ROOT/smallnote" -nt "$APP_BUNDLE/Contents/Info.plist" ]]; then
+  if [[ ! -x "$APP" || ! -f "$APP_BUNDLE/Contents/Info.plist" || "$ROOT/SmallNoteDesktop.swift" -nt "$APP" || "$ROOT/smallnote" -nt "$APP_BUNDLE/Contents/Info.plist" ]]; then
     mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
-    /usr/bin/swiftc "$ROOT/SmallNoteDesktop.swift" -o "$APP" -framework AppKit -framework CoreGraphics -framework Carbon
+    /usr/bin/swiftc "$ROOT/SmallNoteDesktop.swift" -o "$APP" -framework AppKit -framework CoreGraphics -framework Carbon -framework AVFAudio -framework QuartzCore
     cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,32 +36,53 @@ build_app_if_needed() {
   <false/>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>用于将语音转换为小便签。</string>
 </dict>
 </plist>
 EOF
+    /usr/bin/xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+    /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null 2>&1
   fi
 }
 
 ensure_app() {
   build_app_if_needed
-  while IFS= read -r pid; do
-    [[ -z "$pid" ]] && continue
-    running_path="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-    if [[ "$running_path" != "$APP" ]]; then
-      kill "$pid" >/dev/null 2>&1 || true
-    fi
-  done < <(pgrep -f 'SmallNoteDesktop.app/Contents/MacOS/SmallNoteDesktop' 2>/dev/null || true)
-  if ! pgrep -f "$APP$" >/dev/null 2>&1; then
-    /bin/launchctl setenv XIAOBIANQIAN_CLI "$ROOT/smallnote" >/dev/null 2>&1 || true
-    /bin/launchctl setenv XIAOBIANQIAN_DATA_DIR "$DATA_DIR" >/dev/null 2>&1 || true
-    if [[ -n "${XIAOBIANQIAN_OBSIDIAN_VAULT:-}" ]]; then
-      /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_VAULT "$XIAOBIANQIAN_OBSIDIAN_VAULT" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "${XIAOBIANQIAN_OBSIDIAN_NOTE:-}" ]]; then
-      /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_NOTE "$XIAOBIANQIAN_OBSIDIAN_NOTE" >/dev/null 2>&1 || true
-    fi
+  /bin/launchctl setenv XIAOBIANQIAN_CLI "$ROOT/smallnote" >/dev/null 2>&1 || true
+  /bin/launchctl setenv XIAOBIANQIAN_DATA_DIR "$DATA_DIR" >/dev/null 2>&1 || true
+  if [[ -n "${XIAOBIANQIAN_OBSIDIAN_VAULT:-}" ]]; then
+    /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_VAULT "$XIAOBIANQIAN_OBSIDIAN_VAULT" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${XIAOBIANQIAN_OBSIDIAN_NOTE:-}" ]]; then
+    /bin/launchctl setenv XIAOBIANQIAN_OBSIDIAN_NOTE "$XIAOBIANQIAN_OBSIDIAN_NOTE" >/dev/null 2>&1 || true
+  fi
+  if ! /usr/bin/pgrep -f "$APP_PROCESS_PATTERN" >/dev/null 2>&1; then
     /usr/bin/open -j "$APP_BUNDLE"
   fi
+}
+
+stop_running_notes_app() {
+  # Ask the AppKit app to quit normally first. This runs
+  # applicationWillTerminate, which stops AVAudioEngine and unregisters the
+  # global hotkeys before the process exits.
+  /usr/bin/osascript -e "tell application id \"$APP_ID\" to quit" >/dev/null 2>&1 || true
+  for _ in {1..30}; do
+    if ! pgrep -f "$APP_PROCESS_PATTERN" >/dev/null 2>&1; then
+      return 0
+    fi
+    /bin/sleep 0.1
+  done
+
+  # A hung copy should not block the command forever. Give it a normal signal
+  # first, then use SIGKILL only as the last resort.
+  /usr/bin/pkill -TERM -f "$APP_PROCESS_PATTERN" >/dev/null 2>&1 || true
+  for _ in {1..10}; do
+    if ! pgrep -f "$APP_PROCESS_PATTERN" >/dev/null 2>&1; then
+      return 0
+    fi
+    /bin/sleep 0.1
+  done
+  /usr/bin/pkill -KILL -f "$APP_PROCESS_PATTERN" >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in
@@ -105,6 +128,7 @@ case "${1:-}" in
 import json
 import os
 import shutil
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -115,6 +139,19 @@ note_title = sys.argv[4] if len(sys.argv) > 4 else ""
 note_tags = sys.argv[5] if len(sys.argv) > 5 else ""
 attachment_inputs = sys.argv[6:]
 os.makedirs(os.path.dirname(path), exist_ok=True)
+
+try:
+    default_color = int(subprocess.check_output([
+        "/usr/bin/defaults",
+        "read",
+        "com.andrew.xiaobianqian.desktop",
+        "smallNoteDefaultCategory",
+    ], text=True).strip())
+except Exception:
+    default_color = 0
+if default_color not in {0, 1, 2, 3, 4}:
+    default_color = 0
+
 try:
     with open(path, "r", encoding="utf-8") as f:
         notes = json.load(f)
@@ -157,7 +194,7 @@ for source in attachment_inputs:
 notes.append({
     "id": note_id,
     "text": text,
-    "color": len(notes) % 6,
+    "color": default_color,
     "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "archivedAt": None,
     "attachments": attachments,
@@ -172,7 +209,38 @@ PY
     echo "已添加小便签。"
     ;;
   clear)
-    printf "[]" > "$NOTES"
+    /usr/bin/python3 - "$NOTES" "$DELETED" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+notes_path, deleted_path = sys.argv[1], sys.argv[2]
+try:
+    with open(notes_path, encoding="utf-8") as f:
+        notes = json.load(f)
+except Exception:
+    notes = []
+try:
+    with open(deleted_path, encoding="utf-8") as f:
+        deleted = json.load(f)
+except Exception:
+    deleted = []
+
+if notes:
+    deleted.append({
+        "deletedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "reason": "clear",
+        "notes": notes,
+    })
+    os.makedirs(os.path.dirname(deleted_path), exist_ok=True)
+    with open(deleted_path, "w", encoding="utf-8") as f:
+        json.dump(deleted, f, ensure_ascii=False, indent=2)
+
+os.makedirs(os.path.dirname(notes_path), exist_ok=True)
+with open(notes_path, "w", encoding="utf-8") as f:
+    json.dump([], f, ensure_ascii=False, indent=2)
+PY
     ensure_app
     echo "已清空小便签。"
     ;;
@@ -221,17 +289,21 @@ PY
     fi
     /usr/bin/python3 - "$NOTES" "$note_id" <<'PY'
 import json
-import os
 import fcntl
+import os
+import re
 import shutil
+import subprocess
 import sys
+import urllib.error
+import urllib.request
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 notes_path, note_id = sys.argv[1], sys.argv[2]
 vault_root_value = os.environ.get("XIAOBIANQIAN_OBSIDIAN_VAULT", "").strip()
 target_value = os.environ.get("XIAOBIANQIAN_OBSIDIAN_NOTE", "").strip()
-
 if not vault_root_value or not target_value:
     print("请先设置 XIAOBIANQIAN_OBSIDIAN_VAULT 和 XIAOBIANQIAN_OBSIDIAN_NOTE 后再归档。")
     raise SystemExit(1)
@@ -257,9 +329,121 @@ if note.get("archivedAt"):
     raise SystemExit(0)
 
 text = str(note.get("text", "")).strip()
-# 标题和标签在创建便签时由 AI 生成并存储，此处直接读取
-title = str(note.get("title", "")).strip() or "小便签记录"
-tags = str(note.get("tags", "")).strip()
+if not text:
+    print("便签正文为空，未存入语音笔记。", file=sys.stderr)
+    raise SystemExit(1)
+
+KEYCHAIN_SERVICE = os.environ.get(
+    "XIAOBIANQIAN_DEEPSEEK_KEYCHAIN_SERVICE",
+    "com.xiaobianqian.deepseek-api",
+)
+KEYCHAIN_ACCOUNT = os.environ.get("XIAOBIANQIAN_DEEPSEEK_KEYCHAIN_ACCOUNT", os.environ.get("USER", ""))
+MODEL = os.environ.get("XIAOBIANQIAN_DEEPSEEK_MODEL", "deepseek-v4-flash")
+API_URL = os.environ.get(
+    "XIAOBIANQIAN_DEEPSEEK_API_URL",
+    "https://api.deepseek.com/chat/completions",
+)
+
+def read_api_key():
+    configured = os.environ.get("XIAOBIANQIAN_DEEPSEEK_API_KEY", "").strip()
+    if configured:
+        return configured
+    # The key is deliberately kept out of notes.json and the app bundle.
+    try:
+        result = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", KEYCHAIN_SERVICE, "-w"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError("没有找到 DeepSeek API Key；请重新配置小便签。") from error
+    key = result.stdout.strip()
+    if not key:
+        raise RuntimeError("DeepSeek API Key 为空；请重新配置小便签。")
+    return key
+
+def normalize_metadata(value):
+    if not isinstance(value, dict):
+        raise ValueError("AI 返回格式无效")
+    title = " ".join(str(value.get("title", "")).split()).strip("#：:。.!！?？ ")
+    callout_title = " ".join(str(value.get("callout_title", "")).split()).strip("#：:。.!！?？ ")
+    polished_text = str(value.get("polished_text", "")).strip()
+    raw_tags = value.get("tags")
+    if not isinstance(raw_tags, list):
+        raise ValueError("AI 没有返回标签列表")
+    tags = []
+    for raw_tag in raw_tags:
+        tag = "".join(str(raw_tag).split()).lstrip("#").strip("，,。.!！?？#")
+        if tag and tag not in tags:
+            tags.append(tag)
+    if not title or len(title) > 20 or not callout_title or len(callout_title) > 10 or len(tags) != 3:
+        raise ValueError("AI 返回的标题、摘要标题或三个标签不符合要求")
+    return title, callout_title, polished_text, " ".join(f"#{tag}" for tag in tags)
+
+def validate_polished_text(original, polished):
+    if not polished:
+        raise ValueError("AI 没有返回润色后的正文")
+    if len(polished) > len(original) * 4 + 200:
+        raise ValueError("AI 润色结果异常冗长")
+
+    # These tokens are factual anchors: do not let a stylistic rewrite silently drop them.
+    token_pattern = re.compile(r"https?://[^\\s]+|[A-Za-z][A-Za-z0-9_.@/-]*|\\d[\\d,.:/-]*[年月日时分秒次元%％号]*|[“\"《【][^”\"》】]{1,80}[”\"》】]")
+    required = Counter(token_pattern.findall(original))
+    available = Counter(token_pattern.findall(polished))
+    missing = [token for token, count in required.items() if available[token] < count]
+    if missing:
+        raise ValueError("AI 润色遗漏了原文中的关键信息")
+    return polished
+
+def generate_metadata(body):
+    prompt = (
+        "请为下面这条个人语音笔记生成归档元数据。只返回 JSON 对象，不要 Markdown。"
+        "JSON 必须是 {\\\"title\\\": \\\"…\\\", \\\"callout_title\\\": \\\"…\\\", \\\"polished_text\\\": \\\"…\\\", \\\"tags\\\": [\\\"…\\\", \\\"…\\\", \\\"…\\\"]}。"
+        "title 为中文短标题，不超过20个字符；callout_title 是如 处理方案、会议要点、待办事项 这样的内容概括，不超过10个字符；"
+        "tags 必须恰好三个，不能含 # 或空格，"
+        "必须是内容相关关键词，禁止使用泛化标签如 小便签、语音笔记、闪念、快捷记录。"
+        "polished_text 是原文的轻度润色版：只能调整语序、补足必要连接词、整理段落或列表；绝不能摘要、删减、合并或遗漏任何要点，"
+        "不能添加原文没有的事实或推断。所有人物、地点、日期、数字、金额、药名、专名、引号内容、链接、待办和清单项必须完整保留。"
+        "若原文已经通顺，polished_text 应原样返回。polished_text 中不要添加标题、标签、callout 或 Markdown 代码围栏。\\n\\n"
+        f"笔记正文：\\n{body}"
+    )
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": "你是严谨的中文个人知识库编辑。"},
+            {"role": "user", "content": prompt},
+        ],
+        "thinking": {"type": "disabled"},
+        "temperature": 0.2,
+        "max_tokens": min(8192, max(360, int(len(body) * 1.6) + 200)),
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        API_URL,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {read_api_key()}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response_body = json.load(response)
+        content = response_body["choices"][0]["message"]["content"]
+        title, callout_title, polished_text, tags = normalize_metadata(json.loads(content))
+        return title, callout_title, validate_polished_text(body, polished_text), tags
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"DeepSeek 请求失败（HTTP {error.code}），未写入笔记。") from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RuntimeError("无法连接 DeepSeek，未写入笔记。") from error
+    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("DeepSeek 未返回完整、合格的润色正文与归档信息，未写入笔记。") from error
+
+try:
+    title, callout_title, polished_text, tags = generate_metadata(text)
+except RuntimeError as error:
+    print(str(error), file=sys.stderr)
+    raise SystemExit(1)
+
 attachments = note.get("attachments") or []
 
 # 时间戳取便签创建时间
@@ -313,7 +497,7 @@ def quote_content(value):
         parts.append("附件：" + "；".join(item["link"] for item in archived_attachments))
     return "\n".join(f"> {line}" if line else ">" for line in (parts or [""]))
 
-entry = f"\n\n#### {title}\n{quote_content(text)}\n{timestamp}\n{tags}\n"
+entry = f"\n\n#### {title}\n> [!summary] {callout_title}\n{quote_content(polished_text)}\n\n**记录时间**：{timestamp}  \n**话题**： {tags}\n"
 
 target.parent.mkdir(parents=True, exist_ok=True)
 with target.open("a", encoding="utf-8") as f:
@@ -361,16 +545,19 @@ PY
     ensure_app
     echo "小便签桌面程序已打开。"
     ;;
+  install)
+    build_app_if_needed
+    echo "本地 App 已构建到：$APP_BUNDLE"
+    ;;
   stop)
-    pkill -f 'SmallNoteDesktop.app/Contents/MacOS/SmallNoteDesktop' >/dev/null 2>&1 || true
-    pkill -f "$LEGACY_APP$" >/dev/null 2>&1 || true
+    stop_running_notes_app
     echo "小便签桌面程序已关闭。"
     ;;
   doctor)
     build_app_if_needed
-    echo "目标程序：$APP"
-    echo "运行中的 SmallNoteDesktop："
-    pgrep -fl SmallNoteDesktop || echo "  未运行"
+    echo "源码构建：$APP"
+    echo "运行中的当前 App："
+    pgrep -fl "$APP_PROCESS_PATTERN" || echo "  未运行"
     echo "当前便签数据：$NOTES"
     if [[ -f "$NOTES" ]]; then
       /usr/bin/python3 - "$NOTES" <<'PY'
@@ -385,6 +572,29 @@ PY
     else
       echo "便签数量：0"
     fi
+    echo "语音热词表：$HOTWORDS"
+    if [[ -f "$HOTWORDS" ]]; then
+      /usr/bin/python3 - "$HOTWORDS" <<'PY'
+import sys
+
+terms = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    value = line.strip()
+    if value and not value.startswith("#") and value not in terms:
+        terms.append(value)
+print(f"热词数量：{len(terms)}")
+PY
+    else
+      echo "热词数量：0（文件不存在，将使用内置默认词表）"
+    fi
+    ;;
+  hotwords)
+    if [[ ! -f "$HOTWORDS" ]]; then
+      echo "热词表不存在：$HOTWORDS"
+      exit 1
+    fi
+    /usr/bin/open -a TextEdit "$HOTWORDS"
+    echo "已用文本编辑打开语音热词表：$HOTWORDS"
     ;;
   *)
     cat <<'EOF'
@@ -395,6 +605,7 @@ PY
   smallnote restore
   smallnote archive NOTE_ID
   smallnote open
+  smallnote hotwords
   smallnote stop
 EOF
     ;;
