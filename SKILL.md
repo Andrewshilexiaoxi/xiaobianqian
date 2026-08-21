@@ -1,122 +1,124 @@
 ---
 name: xiaobianqian
-description: Use when the user says 小便签, 小贴纸, 桌面便签, 桌面小便签, 贴到桌面, 记录到桌面, 临时便签, 小边签, 小编签, 打开小便签, 显示小便签, 清空小便签, or 存入语音笔记 to record, manage, or archive colorful desktop sticky notes on Andrew's Mac. Supports image, PDF, and Markdown attachments.
+description: Use when the user says 小便签、小贴纸、桌面便签、桌面小便签、临时便签、打开小便签、显示小便签、清空小便签、恢复小便签 or 存入语音笔记.
 ---
 
 # 小便签
 
 ## Purpose
 
-Record lightweight, temporary thoughts as colorful desktop sticky notes on Andrew's Mac.
-Notes may include file attachments. Supported attachment types include images, PDFs, and Markdown files; other files can be copied as generic attachments if explicitly provided.
-Each desktop sticky note has a `存笔记` button. When Obsidian environment variables are configured, that button appends the note to a chosen Obsidian note.
-When the desktop app is open, pressing `Ctrl+2` anywhere on the Mac should directly create a new blank desktop sticky note and place the cursor inside that note's editable body. There is no separate temporary input box.
+Record lightweight, temporary thoughts as colorful desktop capsule notes on macOS. Notes can be edited, searched, categorized, attached to files, deleted, restored from the latest backup, or archived into a user-configured Obsidian note.
 
-## Trigger Rules
+The app is a temporary information buffer, not a replacement for a long-term knowledge base:
 
-Use this skill whenever the user's message includes any of these trigger phrases:
+```text
+快速输入 → 桌面胶囊暂存 → 查看与处理 → 删除或存入 Obsidian
+```
+
+## Trigger rules
+
+Use this skill when the user asks for:
 
 ```text
 小便签
 小贴纸
 桌面便签
 桌面小便签
-贴到桌面
-记录到桌面
 临时便签
-小边签
-小编签
 打开小便签
 显示小便签
 清空小便签
+恢复小便签
 存入语音笔记
 ```
 
-- If the user writes any creation trigger followed by content, create a new desktop sticky note with all content after the trigger phrase.
-- Creation triggers are: `小便签`, `小贴纸`, `桌面便签`, `桌面小便签`, `贴到桌面`, `记录到桌面`, `临时便签`, `小边签`, `小编签`.
-- If the user writes a creation trigger on its own and then provides text on following lines, record the following text.
-- If the user includes local file paths as attachments, pass them after `--` so they are copied into the sticky-note attachment folder.
-- If the user asks to `清空小便签`, clear all current sticky notes permanently.
-- If the user asks to `恢复小便签`, restore the most recently deleted or cleared sticky-note batch only if an older backup exists. Current delete and clear operations are permanent.
-- If the user asks to `打开小便签`, start or refresh the desktop sticky-note display.
-- If the user asks to `显示小便签`, start or refresh the desktop sticky-note display.
-- If the user asks to store a sticky note into the voice note, use `smallnote archive NOTE_ID` when the note ID is known.
-- After a sticky note is archived successfully, the archived state must persist in `notes.json` via the note's `archivedAt` field. The desktop UI must keep showing `已存` for that note after any later add/delete/refresh operation, not only immediately after the button click.
-- Desktop sticky notes stay a uniform compact size by default. The note body is always a native editable text area: click to place the cursor, freely select, copy, paste, delete, undo, modify text, and use voice input. Changes persist automatically to `notes.json` without separate edit or save buttons. Editing an archived note changes only the desktop copy and does not rewrite its existing Obsidian archive entry.
-- Keep all visible action buttons on the first row. Do not add separate copy, edit, or done buttons.
-- The desktop display should be launched through `smallnote open` or `smallnote add`, which builds and opens `scripts/SmallNoteDesktop.app`. Do not run the raw `SmallNoteDesktop` binary in a foreground terminal session, because closing that terminal can close the sticky-note display.
-- `Ctrl+2` depends on the desktop app being open. If the hotkey does not respond from other apps, macOS may need Accessibility permission for `SmallNoteDesktop.app` / `小便签` in System Settings.
-- If the user asks what this skill does, explain the above briefly.
+- If a creation trigger is followed by content, create a note with the remaining content.
+- If local file paths are supplied as attachments, pass them after `--` to `scripts/smallnote add`.
+- `打开小便签` and `显示小便签` use `scripts/smallnote open`.
+- `清空小便签` uses `scripts/smallnote clear`; the latest batch is backed up to `deleted.json`.
+- `恢复小便签` uses `scripts/smallnote restore` when a backup exists.
+- To archive a known note ID, use `scripts/smallnote archive NOTE_ID`.
+- Do not put runtime notes, attachments or credentials into the repository.
+
+## Implemented interaction
+
+- Notes live as independent windows on the left side of the screen and collapse into narrow tabs by default.
+- Hovering a tab reveals a same-height first-line preview; clicking it opens an editable card.
+- Moving the pointer to the left screen edge wakes all capsules together; leaving the edge collapses unpinned capsules.
+- Pinned notes remain in preview width until unpinned.
+- Notes can be reordered by vertical dragging; supported trackpads may use a three-finger vertical pan.
+- The card supports five semantic colors: urgent/red, inspiration/purple, daily/yellow, work/blue and other/green.
+- Search covers title, body, tags and attachment names.
+- The control beside search opens batch selection; selected notes can be deleted after confirmation.
+- `Ctrl+2` creates a blank note and focuses its body.
+- A standalone tap of the right Command key toggles optional cloud Chinese dictation. The first tap starts Volcengine ASR; the second tap finishes it. DeepSeek lightly polishes the result and creates a new note. If polishing fails, raw ASR text is kept.
+- Settings control the default expansion mode, default color and editable voice hotwords.
 
 ## Commands
 
-Use the bundled helper script:
-
 ```bash
-scripts/smallnote add "便签内容" --title "AI生成的标题" --tags "#标签1 #标签2 #标签3"
-scripts/smallnote add "便签内容" --title "标题" --tags "#标签1 #标签2 #标签3" -- "/path/to/image.png" "/path/to/file.pdf" "/path/to/note.md"
+scripts/smallnote add "便签内容" --title "标题" --tags "#标签1 #标签2 #标签3"
+scripts/smallnote add "便签内容" -- "/path/to/image.png" "/path/to/file.pdf" "/path/to/note.md"
 scripts/smallnote list
+scripts/smallnote open
+scripts/smallnote stop
+scripts/smallnote doctor
+scripts/smallnote hotwords
 scripts/smallnote clear
 scripts/smallnote restore
 scripts/smallnote archive "NOTE_ID"
-scripts/smallnote open
 ```
 
-## Obsidian Voice Note Archive
+The desktop app should be launched through `smallnote open` or `smallnote add`, which builds and opens the local App bundle. Do not run the raw binary in a foreground terminal session.
 
-To enable Obsidian archive, configure both environment variables:
+## Data and configuration
+
+The default data directory is:
 
 ```text
-XIAOBIANQIAN_OBSIDIAN_VAULT=/path/to/your/ObsidianVault
-XIAOBIANQIAN_OBSIDIAN_NOTE=临时存放/01语音笔记.md
+~/Library/Application Support/xiaobianqian/
 ```
 
-Archive format:
+Override it with:
 
-```markdown
-
-#### 标题（创建时由AI生成）
-> 核心内容
-YYYY-MM-DD HH:MM（便签创建时间）
-#标签1 #标签2 #标签3（创建时由AI生成）
+```bash
+export XIAOBIANQIAN_DATA_DIR="$HOME/Documents/xiaobianqian-data"
 ```
 
-The title and tags are generated by the AI assistant at note creation time based on the note content, then stored in `notes.json`. The archive command reads these pre-generated values directly — no runtime generation.
+The directory contains `notes.json`, `deleted.json`, `attachments/` and `voice-hotwords.txt`. Editing a note updates `notes.json` automatically. `archivedAt` is persistent: once a note is archived, later refreshes and changes to other notes keep it marked `已存`.
 
-Tag generation rules:
-- Generate exactly 3 tags that genuinely reflect the note's topic content.
-- Tags must be content-specific (e.g. `#GitHub #双因素认证 #恢复代码`), NEVER use meaningless fixed tags like `#小便签 #语音笔记 #闪念`.
-- Tags should be concise Chinese or English keywords relevant to the content.
-- Title should be a short summary (max ~20 chars) of the note content.
+## Obsidian archive
 
-When a sticky note has attachments, `smallnote archive NOTE_ID` copies those attachments into the Obsidian vault under:
+Configure the vault and target note before using `存笔记`:
+
+```bash
+export XIAOBIANQIAN_OBSIDIAN_VAULT="$HOME/ObsidianVault"
+export XIAOBIANQIAN_OBSIDIAN_NOTE="临时存放/01语音笔记.md"
+```
+
+The target may be absolute or relative to the configured vault. Attachments are copied to `资料库/附件/小便签/NOTE_ID/` and written as clickable Obsidian wikilinks.
+
+Archive metadata currently requests DeepSeek. Supply a key through `XIAOBIANQIAN_DEEPSEEK_API_KEY`, or configure the macOS Keychain service and account with `XIAOBIANQIAN_DEEPSEEK_KEYCHAIN_SERVICE` and `XIAOBIANQIAN_DEEPSEEK_KEYCHAIN_ACCOUNT`. Never write the key into source code, `notes.json` or the App bundle.
+
+## Optional voice configuration
+
+The Swift app reads the optional OpenLess provider configuration from the macOS Keychain item:
 
 ```text
-资料库/附件/小便签/NOTE_ID/
+service: com.openless.app
+account: credentials.v1.chunk.0
 ```
 
-The voice-note entry must include clickable Obsidian wikilinks to those copied files, for example:
+Voice input may require Input Monitoring and Microphone permissions. Text entry, attachments, search and local note management work without cloud credentials.
 
-```markdown
-> 附件：[[资料库/附件/小便签/NOTE_ID/file.pdf|file.pdf]]
-```
+## Codex workflow
 
-## Workflow
+When creating a note from a Codex request:
 
-1. Extract the note body.
-   - Remove the leading trigger phrase and common punctuation after it, such as `：`, `:`, `，`, `,`, or whitespace.
-   - Preserve line breaks and the user's wording.
-2. **Generate a title and 3 tags based on the note content.**
-   - Title: a concise summary of the note content (max ~20 chars, Chinese).
-   - Tags: exactly 3 content-relevant topic tags (e.g. `#GitHub #双因素认证 #恢复代码`).
-   - Tags must NOT be meaningless fixed tags like `#小便签 #语音笔记 #闪念`.
-3. Identify attachments only when the user provides explicit local file paths or attached files available in the local workspace.
-4. If the extracted body is non-empty, run `scripts/smallnote add`, passing `--title` and `--tags` followed by attachment paths after `--` when present.
-5. Reply briefly that the note has been added, mentioning the attachment count if any.
-6. If the extracted body is empty and the user clearly wants to create a note, ask for the content.
+1. Remove the trigger phrase and following punctuation from the body.
+2. Preserve the user's wording and line breaks.
+3. Generate a short content-specific title and exactly three relevant tags.
+4. Run `scripts/smallnote add` with `--title` and `--tags`; pass attachments after `--`.
+5. Do not archive into Obsidian unless the user explicitly asks.
 
-## Important
-
-- Do not save these notes into Obsidian unless the user explicitly asks.
-- Keep the response short; this is a capture workflow, not a writing workflow.
-- The notes are intentionally temporary and can be cleared daily. Single-note delete and clear-all are permanent after confirmation.
+Keep capture replies brief. This skill is for fast capture and management, not for turning every note into a long-form document.
